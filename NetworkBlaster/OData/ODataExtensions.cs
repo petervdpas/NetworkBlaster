@@ -86,15 +86,21 @@ public static class ODataExtensions
         while (!string.IsNullOrEmpty(nextLink))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            page = await FetchAbsoluteAsync<T>(client, nextLink, cancellationToken).ConfigureAwait(false);
+            page = await FetchByLinkAsync<T>(client, nextLink, cancellationToken).ConfigureAwait(false);
             foreach (var item in page.Value) yield return item;
             nextLink = page.NextLink;
         }
     }
 
-    internal static async Task<ODataPage<T>> FetchAbsoluteAsync<T>(INetClient client, string absoluteUrl, CancellationToken ct)
+    /// <summary>
+    /// Fetches a single page by following a server-supplied <c>@odata.nextLink</c>. The
+    /// link can be absolute (<c>https://server/...</c>) or relative
+    /// (<c>Customers?$skip=20</c>); per OData v4 either form is spec-compliant.
+    /// Relative links are resolved against the underlying <see cref="INetClient"/>'s base address.
+    /// </summary>
+    internal static async Task<ODataPage<T>> FetchByLinkAsync<T>(INetClient client, string link, CancellationToken ct)
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, new Uri(absoluteUrl, UriKind.Absolute));
+        var request = new HttpRequestMessage(HttpMethod.Get, new Uri(link, UriKind.RelativeOrAbsolute));
         using var response = await client.SendAsync(request, options: null, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);

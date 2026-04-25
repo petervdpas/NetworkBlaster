@@ -98,6 +98,27 @@ public class ODataPagingTests
     }
 
     [Fact]
+    public async Task QueryODataAsync_RelativeNextLink_IsResolvedAgainstBaseAddress()
+    {
+        // Northwind and a few other public OData services hand out relative nextLinks like
+        // "Customers?$skiptoken=..." rather than absolute URLs. The OData v4 spec allows either.
+        var handler = new RecordingHandler()
+            .RespondWith(HttpStatusCode.OK,
+                "{\"value\":[{\"id\":1,\"name\":\"a\"}],\"@odata.nextLink\":\"Customers?$skiptoken=X\"}")
+            .RespondWith(HttpStatusCode.OK,
+                "{\"value\":[{\"id\":2,\"name\":\"b\"}]}");
+        var client = BuildClient(handler);
+
+        var collected = new List<Customer>();
+        await foreach (var c in client.QueryODataAsync<Customer>("Customers"))
+            collected.Add(c);
+
+        Assert.Equal(2, collected.Count);
+        Assert.Equal("https://example.test/Customers?$skiptoken=X",
+            handler.Requests[1].RequestUri!.ToString());
+    }
+
+    [Fact]
     public async Task QueryODataAsync_HonoursCancellationBetweenPages()
     {
         var handler = new RecordingHandler()

@@ -46,7 +46,7 @@ dotnet add package NetworkBlaster
 ### `.csx` — bearer token, no vault
 
 ```csharp
-#r "nuget: NetworkBlaster, 1.0.2"
+#r "nuget: NetworkBlaster, 1.0.3"
 using NetworkBlaster;
 
 var gh = NetClient.WithToken("https://api.github.com/", "ghp_xxx");
@@ -57,7 +57,7 @@ Console.WriteLine(body);
 ### `.csx` — API-key header
 
 ```csharp
-#r "nuget: NetworkBlaster, 1.0.2"
+#r "nuget: NetworkBlaster, 1.0.3"
 using NetworkBlaster;
 
 var api = NetClient.WithApiKey("https://api.example.com/", "X-API-Key", "secret");
@@ -83,7 +83,7 @@ var paris = await weather.GetStringAsync("data/2.5/weather?q=Paris");
 ### `.csx` — OAuth2 client credentials (token cached + auto-refresh)
 
 ```csharp
-#r "nuget: NetworkBlaster, 1.0.2"
+#r "nuget: NetworkBlaster, 1.0.3"
 using NetworkBlaster;
 
 var graph = NetClient.WithOAuth2ClientCredentials(
@@ -121,7 +121,7 @@ var report = await site.GetJsonAsync<Report>("reports/today");
 ### `.csx` inside TaskBlaster — resolver from `Secrets`
 
 ```csharp
-#r "nuget: NetworkBlaster, 1.0.2"
+#r "nuget: NetworkBlaster, 1.0.3"
 using NetworkBlaster;
 
 var gh = new NetClient(Secrets.Resolver, "github");
