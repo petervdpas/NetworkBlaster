@@ -1,5 +1,7 @@
 using System;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using NetworkBlaster.Interfaces;
 
 namespace NetworkBlaster;
@@ -9,15 +11,15 @@ namespace NetworkBlaster;
 /// the source of defaults for retry budget / JSON serialization on every request.
 /// </summary>
 /// <remarks>
-/// NetworkBlaster never reads the vault directly. Callers wire a
-/// <see cref="SecretResolver"/> delegate (typically <c>Secrets.Resolver</c>
-/// from TaskBlaster / SecretBlast) and the client lazily pulls values
-/// at request time.
+/// NetworkBlaster never reads the vault directly. Callers wire a resolver
+/// delegate of shape <c>Func&lt;category, key, ct, Task&lt;string&gt;&gt;</c>
+/// (typically <c>Secrets.Resolver</c> from TaskBlaster / SecretBlast) and the
+/// client lazily pulls values at request time.
 /// </remarks>
 public class NetworkBlasterOptions
 {
-    /// <summary>Delegate used to resolve named-connection secrets at runtime.</summary>
-    public SecretResolver? Resolver { get; set; }
+    /// <summary>Delegate used to resolve named-connection secrets at runtime, shape <c>(category, key, ct) =&gt; Task&lt;string&gt;</c>.</summary>
+    public Func<string, string, CancellationToken, Task<string>>? Resolver { get; set; }
 
     /// <summary>Logical connection name; used as the secret category.</summary>
     public string ConnectionName { get; set; } = string.Empty;

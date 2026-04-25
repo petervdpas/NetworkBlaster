@@ -13,8 +13,9 @@ namespace NetworkBlaster;
 
 /// <summary>
 /// Default <see cref="INetClient"/> implementation: a thin <see cref="HttpClient"/>
-/// wrapper that resolves base URL and auth from a <see cref="SecretResolver"/>
-/// on first request and caches them for the lifetime of the instance.
+/// wrapper that resolves base URL and auth from a
+/// <c>Func&lt;category, key, ct, Task&lt;string&gt;&gt;</c> resolver on first
+/// request and caches them for the lifetime of the instance.
 /// </summary>
 /// <remarks>
 /// Resolver lookups (defaults shown):
@@ -30,7 +31,7 @@ public sealed class NetClient : INetClient
     private static readonly JsonSerializerOptions DefaultJsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly HttpClient _http;
-    private readonly SecretResolver _resolver;
+    private readonly Func<string, string, CancellationToken, Task<string>> _resolver;
     private readonly string _baseUrlKey;
     private readonly string _tokenKey;
     private readonly JsonSerializerOptions _jsonOptions;
@@ -48,7 +49,7 @@ public sealed class NetClient : INetClient
     /// the first time a request is made.
     /// </summary>
     public NetClient(
-        SecretResolver resolver,
+        Func<string, string, CancellationToken, Task<string>> resolver,
         string connectionName,
         HttpClient? httpClient = null,
         string baseUrlKey = "baseUrl",

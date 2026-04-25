@@ -11,8 +11,8 @@ namespace NetworkBlaster.Interfaces;
 /// </summary>
 /// <remarks>
 /// A connection is a logical group of secrets (base URL, auth token, headers)
-/// resolved lazily through a <see cref="SecretResolver"/> on first use and cached
-/// for the lifetime of the client.
+/// resolved lazily through a <c>Func&lt;category, key, ct, Task&lt;string&gt;&gt;</c>
+/// delegate on first use and cached for the lifetime of the client.
 /// </remarks>
 public interface INetClient
 {
