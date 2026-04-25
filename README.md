@@ -12,10 +12,10 @@ Think "Postman as a library": named connections, lazy auth, script-friendly defa
 
 ---
 
-> ✅ **Status:** 0.4 — adds **first-class auth** beyond bearer/basic/api-key:
-> OAuth2 client-credentials with token caching + refresh, API key in query
-> string, NTLM / Windows Integrated Auth, and a server-managed cookie jar.
-> 205 tests green.
+> ✅ **Status:** 1.0 — full feature set: REST verbs + JSON / XML / SOAP, seven
+> auth factories (bearer, basic, API-key header *or* query, OAuth2 client-credentials
+> with token caching, NTLM/Windows, cookie jar), typed OData v4 with auto-paging,
+> per-request retry / timeout / headers / query. 246 tests green, .NET 10.
 
 ---
 
@@ -29,6 +29,7 @@ Think "Postman as a library": named connections, lazy auth, script-friendly defa
 * 🔹 **JSON helpers in the box** — `GetJsonAsync<T>` / `PostJsonAsync<T>` / `PutJsonAsync<T>` / `PatchJsonAsync<T>`, with configurable `JsonSerializerOptions`.
 * 🔹 **Typed OData v4** — LINQ-flavored chain (`.Where(c => c.Status == "Active")`), auto-paging `IAsyncEnumerable<T>`, and a vault-agnostic filter DSL with operator overloads.
 * 🔹 **Real-world auth** — bearer, basic, API key (header *or* query), OAuth2 client-credentials with token caching + refresh, NTLM / Windows auth, and a cookie jar.
+* 🔹 **SOAP + XML in the box** — SOAP 1.1 / 1.2 envelope helper, typed `SendSoapAsync<TReq, TResp>` round-trip, `Fault` → exception, plus general `GetXmlAsync<T>` / `PostXmlAsync` JSON-mirrors.
 
 ---
 
@@ -45,7 +46,7 @@ dotnet add package NetworkBlaster
 ### `.csx` — bearer token, no vault
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.4.0"
+#r "nuget: NetworkBlaster, 1.0.0"
 using NetworkBlaster;
 
 var gh = NetClient.WithToken("https://api.github.com/", "ghp_xxx");
@@ -56,7 +57,7 @@ Console.WriteLine(body);
 ### `.csx` — API-key header
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.4.0"
+#r "nuget: NetworkBlaster, 1.0.0"
 using NetworkBlaster;
 
 var api = NetClient.WithApiKey("https://api.example.com/", "X-API-Key", "secret");
@@ -82,7 +83,7 @@ var paris = await weather.GetStringAsync("data/2.5/weather?q=Paris");
 ### `.csx` — OAuth2 client credentials (token cached + auto-refresh)
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.4.0"
+#r "nuget: NetworkBlaster, 1.0.0"
 using NetworkBlaster;
 
 var graph = NetClient.WithOAuth2ClientCredentials(
@@ -120,7 +121,7 @@ var report = await site.GetJsonAsync<Report>("reports/today");
 ### `.csx` inside TaskBlaster — resolver from `Secrets`
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.4.0"
+#r "nuget: NetworkBlaster, 1.0.0"
 using NetworkBlaster;
 
 var gh = new NetClient(Secrets.Resolver, "github");
@@ -207,6 +208,82 @@ await client.GetAsync("slow", Options.Timeout(TimeSpan.FromSeconds(5)), cts.Toke
 ```
 
 If the caller cancels before the timeout fires, the caller's cancellation wins.
+
+---
+
+## 🧼 SOAP (1.1 / 1.2) and general XML
+
+For legacy services that speak SOAP, NetworkBlaster ships envelope helpers and a typed `XmlSerializer` round-trip. SOAP `<Fault>` responses are surfaced as a typed `SoapFault` exception so you don't have to re-parse XML to detect errors.
+
+### Raw SOAP — paste-an-envelope style
+
+```csharp
+using NetworkBlaster;
+using NetworkBlaster.Soap;
+
+var soap = NetClient.WithToken("https://legacy.example.com/svc", token);
+
+string responseInner = await soap.SendSoapAsync(
+    path:    "weather.asmx",
+    action:  "http://tempuri.org/GetWeather",
+    bodyXml: """<GetWeather xmlns="http://tempuri.org/"><City>Paris</City></GetWeather>""",
+    version: SoapVersion.V11);
+```
+
+### Typed SOAP — `XmlSerializer` round-trip
+
+```csharp
+[XmlRoot("GetWeather", Namespace = "http://tempuri.org/")]
+public class GetWeatherRequest  { [XmlElement("City")] public string? City { get; set; } }
+
+[XmlRoot("GetWeatherResponse", Namespace = "http://tempuri.org/")]
+public class GetWeatherResponse { [XmlElement("Temp")] public int Temp { get; set; } }
+
+var resp = await soap.SendSoapAsync<GetWeatherRequest, GetWeatherResponse>(
+    path:    "weather.asmx",
+    action:  "http://tempuri.org/GetWeather",
+    payload: new GetWeatherRequest { City = "Paris" },
+    version: SoapVersion.V11);
+
+Console.WriteLine(resp!.Temp);
+```
+
+### Faults
+
+```csharp
+try
+{
+    var resp = await soap.SendSoapAsync<GetWeatherRequest, GetWeatherResponse>(...);
+}
+catch (SoapFault f)
+{
+    Console.Error.WriteLine($"{f.Code}: {f.Reason}");
+}
+```
+
+### Envelope helper (compose by hand)
+
+```csharp
+var envelope = SoapEnvelope.Wrap(SoapVersion.V12, bodyXml,
+    headerEntries: new[] { "<auth>secret</auth>" });
+
+string innerXml = SoapEnvelope.Unwrap(envelope);
+SoapFault? fault = SoapEnvelope.TryGetFault(envelope);
+```
+
+### General-purpose XML helpers
+
+For plain REST services that speak XML (no SOAP envelope), the JSON helpers have direct mirrors:
+
+```csharp
+var thing = await client.GetXmlAsync<Thing>("things/42");
+var receipt = await client.PostXmlAsync<Thing, Receipt>("things", thing);
+var updated = await client.PutXmlAsync <Thing, Receipt>("things/42", thing);
+```
+
+Both use `XmlSerializer`; the request body is sent as `application/xml`.
+
+> **Skipping by design:** WSDL → C# generation (use `dotnet-svcutil` once at build-time, then hand the generated types to `SendSoapAsync<TReq, TResp>`); WS-Security; MTOM. Add a `headerEntries` argument to the `SendSoapAsync` calls for header injection if you need WS-Addressing or a custom security header.
 
 ---
 
@@ -373,7 +450,7 @@ public sealed class NetClient : INetClient
     public NetClient WithDefaultHeader(string name, string value);
     public NetClient WithDefaultQuery (string name, string value);
 
-    // additional auth factories (v0.4)
+    // additional auth factories
     public static NetClient WithApiKeyQuery       (string baseUrl, string paramName, string apiKey, HttpClient? http = null, JsonSerializerOptions? json = null);
     public static NetClient WithWindowsAuth       (string baseUrl, JsonSerializerOptions? json = null);
     public static NetClient WithWindowsAuth       (string baseUrl, NetworkCredential credentials, JsonSerializerOptions? json = null);
@@ -396,6 +473,62 @@ public sealed class OAuth2TokenProvider
 
     public Task<string> GetAccessTokenAsync(CancellationToken ct = default);
     public Task         InvalidateAsync();
+}
+
+// ---------- SOAP ----------
+
+namespace NetworkBlaster.Soap;
+
+public enum SoapVersion { V11, V12 }
+
+public sealed class SoapFault : Exception
+{
+    public SoapVersion Version { get; }
+    public string Code   { get; }
+    public string Reason { get; }
+    public string? Detail { get; }
+}
+
+public static class SoapEnvelope
+{
+    public const string Soap11Namespace   = "http://schemas.xmlsoap.org/soap/envelope/";
+    public const string Soap12Namespace   = "http://www.w3.org/2003/05/soap-envelope";
+    public const string Soap11ContentType = "text/xml";
+    public const string Soap12ContentType = "application/soap+xml";
+
+    public static string      Wrap        (SoapVersion v, string body, IEnumerable<string>? headerEntries = null);
+    public static string      Unwrap      (string envelopeXml);
+    public static SoapFault?  TryGetFault (string envelopeXml);
+    public static string      NamespaceFor(SoapVersion v);
+}
+
+public static class SoapExtensions
+{
+    public static Task<string> SendSoapAsync(
+        this INetClient client, string path, string action, string bodyXml,
+        SoapVersion version = SoapVersion.V11,
+        IEnumerable<string>? headerEntries = null,
+        RequestOptions? options = null,
+        CancellationToken ct = default);
+
+    public static Task<TResponse?> SendSoapAsync<TRequest, TResponse>(
+        this INetClient client, string path, string action, TRequest payload,
+        SoapVersion version = SoapVersion.V11,
+        XmlSerializerNamespaces? namespaces = null,
+        IEnumerable<string>? headerEntries = null,
+        RequestOptions? options = null,
+        CancellationToken ct = default);
+}
+
+// ---------- general XML helpers ----------
+
+namespace NetworkBlaster;
+
+public static class XmlExtensions
+{
+    public static Task<T?>          GetXmlAsync<T>        (this INetClient client, string path, RequestOptions? o = null, CancellationToken ct = default);
+    public static Task<TResponse?>  PostXmlAsync<TRequest, TResponse>(this INetClient client, string path, TRequest payload, RequestOptions? o = null, CancellationToken ct = default);
+    public static Task<TResponse?>  PutXmlAsync<TRequest, TResponse> (this INetClient client, string path, TRequest payload, RequestOptions? o = null, CancellationToken ct = default);
 }
 
 public sealed record RequestOptions
