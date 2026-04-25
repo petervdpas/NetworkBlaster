@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="NetworkBlaster.Tests/NetworkBlaster.Tests.csproj" />
+  <Project Path="NetworkBlaster/NetworkBlaster.csproj" />
+</Solution>
