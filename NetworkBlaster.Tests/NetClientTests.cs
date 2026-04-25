@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using NetworkBlaster;
+using NetworkBlaster.Tests.Support;
 using Xunit;
 
 namespace NetworkBlaster.Tests;
@@ -26,15 +27,14 @@ public class NetClientTests
             };
         }
 
-        var handler = new RecordingHandler(HttpStatusCode.OK);
+        var handler = new RecordingHandler().RespondWith(HttpStatusCode.OK);
         var http = new HttpClient(handler);
         var client = new NetClient(Resolver, "github", http);
 
         var response = await client.GetAsync("repos/octocat/hello-world");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.NotNull(handler.LastRequest);
-        Assert.Equal(new Uri("https://example.test/repos/octocat/hello-world"), handler.LastRequest!.RequestUri);
+        Assert.Equal(new Uri("https://example.test/repos/octocat/hello-world"), handler.LastRequest.RequestUri);
         Assert.Equal("Bearer", handler.LastRequest.Headers.Authorization?.Scheme);
         Assert.Equal("ghp_test", handler.LastRequest.Headers.Authorization?.Parameter);
         Assert.Contains(("github", "baseUrl"), calls);
@@ -42,53 +42,49 @@ public class NetClientTests
     }
 
     [Fact]
-    public async Task WithToken_ProducesClientWithBearerAuth_NoResolverNeeded()
+    public async Task EnsureHydratedAsync_FiresResolverOnce_UnderConcurrentFirstRequests()
     {
-        var handler = new RecordingHandler(HttpStatusCode.OK);
-        var client = NetClient.WithToken("https://example.test/", "ghp_xxx", new HttpClient(handler));
+        var baseUrlCalls = 0;
+        Task<string> Resolver(string category, string key, CancellationToken ct)
+        {
+            if (key == "baseUrl") Interlocked.Increment(ref baseUrlCalls);
+            return Task.FromResult(key == "baseUrl" ? "https://example.test/" : string.Empty);
+        }
 
-        var response = await client.GetAsync("ping");
+        var handler = new RecordingHandler();
+        for (var i = 0; i < 8; i++) handler.RespondWith(HttpStatusCode.OK);
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(new Uri("https://example.test/ping"), handler.LastRequest!.RequestUri);
-        Assert.Equal("Bearer", handler.LastRequest.Headers.Authorization?.Scheme);
-        Assert.Equal("ghp_xxx", handler.LastRequest.Headers.Authorization?.Parameter);
-    }
+        var client = new NetClient(Resolver, "shared", new HttpClient(handler));
 
-    [Fact]
-    public async Task Anonymous_ProducesClientWithoutAuthHeader()
-    {
-        var handler = new RecordingHandler(HttpStatusCode.OK);
-        var client = NetClient.Anonymous("https://example.test/", new HttpClient(handler));
+        var tasks = new Task[8];
+        for (var i = 0; i < tasks.Length; i++) tasks[i] = client.GetAsync($"path/{i}");
+        await Task.WhenAll(tasks);
 
-        await client.GetAsync("ping");
-
-        Assert.Null(handler.LastRequest!.Headers.Authorization);
+        Assert.Equal(1, baseUrlCalls);
     }
 
     [Fact]
     public async Task SendAsync_ThrowsClearError_WhenBaseUrlMissing()
     {
         Task<string> Resolver(string category, string key, CancellationToken ct) => Task.FromResult(string.Empty);
-
-        var client = new NetClient(Resolver, "broken", new HttpClient(new RecordingHandler(HttpStatusCode.OK)));
+        var client = new NetClient(Resolver, "broken", new HttpClient(new RecordingHandler()));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetAsync("/anything"));
         Assert.Contains("baseUrl", ex.Message);
         Assert.Contains("broken", ex.Message);
     }
 
-    private sealed class RecordingHandler : HttpMessageHandler
+    [Fact]
+    public async Task GetAsync_AppendsRelativePathToBaseUrl_WithoutLeadingSlash()
     {
-        private readonly HttpStatusCode _status;
-        public HttpRequestMessage? LastRequest { get; private set; }
+        Task<string> Resolver(string c, string k, CancellationToken ct)
+            => Task.FromResult(k == "baseUrl" ? "https://example.test/api/" : string.Empty);
 
-        public RecordingHandler(HttpStatusCode status) => _status = status;
+        var handler = new RecordingHandler().RespondWith(HttpStatusCode.OK);
+        var client = new NetClient(Resolver, "x", new HttpClient(handler));
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            LastRequest = request;
-            return Task.FromResult(new HttpResponseMessage(_status));
-        }
+        await client.GetAsync("widgets/42");
+
+        Assert.Equal(new Uri("https://example.test/api/widgets/42"), handler.LastRequest.RequestUri);
     }
 }

@@ -1,9 +1,12 @@
+using System;
+using System.Text.Json;
 using NetworkBlaster.Interfaces;
 
 namespace NetworkBlaster;
 
 /// <summary>
-/// Options used to register a <see cref="INetClient"/> with the DI container.
+/// Options used to register a <see cref="INetClient"/> with the DI container, and
+/// the source of defaults for retry budget / JSON serialization on every request.
 /// </summary>
 /// <remarks>
 /// NetworkBlaster never reads the vault directly. Callers wire a
@@ -24,4 +27,13 @@ public class NetworkBlasterOptions
 
     /// <summary>Resolver key holding the optional bearer token. Defaults to <c>token</c>.</summary>
     public string TokenKey { get; set; } = "token";
+
+    /// <summary>JSON serializer used by Get/Post/Put/PatchJsonAsync. Defaults to <see cref="JsonSerializerDefaults.Web"/>.</summary>
+    public JsonSerializerOptions? JsonOptions { get; set; }
+
+    /// <summary>Default number of retry attempts on transient failures. <c>0</c> disables retry.</summary>
+    public int DefaultRetryCount { get; set; } = 0;
+
+    /// <summary>Base delay between retry attempts; doubles on each successive retry.</summary>
+    public TimeSpan DefaultRetryBaseDelay { get; set; } = TimeSpan.FromMilliseconds(200);
 }

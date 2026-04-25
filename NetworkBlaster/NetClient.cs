@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -25,10 +27,15 @@ namespace NetworkBlaster;
 /// </remarks>
 public sealed class NetClient : INetClient
 {
+    private static readonly JsonSerializerOptions DefaultJsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly HttpClient _http;
     private readonly SecretResolver _resolver;
     private readonly string _baseUrlKey;
     private readonly string _tokenKey;
+    private readonly JsonSerializerOptions _jsonOptions;
+    private readonly int _defaultRetryCount;
+    private readonly TimeSpan _defaultRetryBaseDelay;
     private readonly SemaphoreSlim _hydrateLock = new(1, 1);
     private bool _hydrated;
 
@@ -39,54 +46,104 @@ public sealed class NetClient : INetClient
     /// Builds a client bound to <paramref name="connectionName"/>; secret values are resolved
     /// the first time a request is made.
     /// </summary>
-    /// <param name="resolver">Delegate that returns secret values for (category, key) pairs.</param>
-    /// <param name="connectionName">Name used as the resolver category for this connection's secrets.</param>
-    /// <param name="httpClient">Optional pre-built <see cref="HttpClient"/>; a fresh instance is created when null.</param>
-    /// <param name="baseUrlKey">Resolver key for the connection's base URL. Defaults to <c>baseUrl</c>.</param>
-    /// <param name="tokenKey">Resolver key for the optional bearer token. Defaults to <c>token</c>.</param>
     public NetClient(
         SecretResolver resolver,
         string connectionName,
         HttpClient? httpClient = null,
         string baseUrlKey = "baseUrl",
-        string tokenKey = "token")
+        string tokenKey = "token",
+        JsonSerializerOptions? jsonOptions = null,
+        int defaultRetryCount = 0,
+        TimeSpan? defaultRetryBaseDelay = null)
     {
         ArgumentNullException.ThrowIfNull(resolver);
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionName);
+        if (defaultRetryCount < 0) throw new ArgumentOutOfRangeException(nameof(defaultRetryCount));
 
         _resolver = resolver;
         _http = httpClient ?? new HttpClient();
         _baseUrlKey = baseUrlKey;
         _tokenKey = tokenKey;
+        _jsonOptions = jsonOptions ?? DefaultJsonOptions;
+        _defaultRetryCount = defaultRetryCount;
+        _defaultRetryBaseDelay = defaultRetryBaseDelay ?? TimeSpan.FromMilliseconds(200);
         ConnectionName = connectionName;
     }
 
+    /// <summary>Script-friendly factory: an anonymous (no-auth) client pinned to <paramref name="baseUrl"/>.</summary>
+    public static NetClient Anonymous(
+        string baseUrl,
+        HttpClient? httpClient = null,
+        JsonSerializerOptions? jsonOptions = null)
+        => Inline(baseUrl, token: null, httpClient, jsonOptions);
+
+    /// <summary>Script-friendly factory: a client with a hard-coded bearer token, no resolver / no vault.</summary>
+    public static NetClient WithToken(
+        string baseUrl,
+        string token,
+        HttpClient? httpClient = null,
+        JsonSerializerOptions? jsonOptions = null)
+        => Inline(baseUrl, token, httpClient, jsonOptions);
+
     /// <summary>
-    /// Script-friendly factory: an anonymous (no-auth) client pinned to <paramref name="baseUrl"/>.
+    /// Script-friendly factory: a client that sends a fixed API-key header
+    /// (e.g. <c>X-API-Key: ...</c>) on every request.
+    /// </summary>
+    public static NetClient WithApiKey(
+        string baseUrl,
+        string headerName,
+        string apiKey,
+        HttpClient? httpClient = null,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        ArgumentException.ThrowIfNullOrWhiteSpace(headerName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+
+        var http = httpClient ?? new HttpClient();
+        http.DefaultRequestHeaders.TryAddWithoutValidation(headerName, apiKey);
+        return Inline(baseUrl, token: null, http, jsonOptions);
+    }
+
+    /// <summary>
+    /// Script-friendly factory: a client that sends HTTP Basic auth
+    /// (<c>Authorization: Basic base64(user:pass)</c>) on every request.
+    /// </summary>
+    public static NetClient WithBasicAuth(
+        string baseUrl,
+        string username,
+        string password,
+        HttpClient? httpClient = null,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        ArgumentNullException.ThrowIfNull(username);
+        ArgumentNullException.ThrowIfNull(password);
+
+        var http = httpClient ?? new HttpClient();
+        var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", encoded);
+        return Inline(baseUrl, token: null, http, jsonOptions);
+    }
+
+    /// <summary>
+    /// Adds a default header that will be sent on every request from this client.
+    /// Returns the same instance for chaining.
     /// </summary>
     /// <example>
     /// <code>
-    /// // in a .csx / LINQPad / PowerShell script
-    /// var api = NetClient.Anonymous("https://api.publicapis.org/");
-    /// var body = await api.GetStringAsync("entries");
+    /// var c = NetClient.Anonymous("https://api.example.com/")
+    ///     .WithDefaultHeader("User-Agent", "my-script/1.0");
     /// </code>
     /// </example>
-    public static NetClient Anonymous(string baseUrl, HttpClient? httpClient = null)
-        => Inline(baseUrl, token: null, httpClient);
+    public NetClient WithDefaultHeader(string name, string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        _http.DefaultRequestHeaders.TryAddWithoutValidation(name, value);
+        return this;
+    }
 
-    /// <summary>
-    /// Script-friendly factory: a client with a hard-coded bearer token, no resolver / no vault.
-    /// </summary>
-    /// <example>
-    /// <code>
-    /// var gh = NetClient.WithToken("https://api.github.com/", "ghp_xxx");
-    /// var json = await gh.GetStringAsync("repos/octocat/hello-world");
-    /// </code>
-    /// </example>
-    public static NetClient WithToken(string baseUrl, string token, HttpClient? httpClient = null)
-        => Inline(baseUrl, token, httpClient);
-
-    private static NetClient Inline(string baseUrl, string? token, HttpClient? httpClient)
+    private static NetClient Inline(string baseUrl, string? token, HttpClient? httpClient, JsonSerializerOptions? jsonOptions)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
         Task<string> Resolver(string category, string key, CancellationToken ct) => key switch
@@ -95,63 +152,227 @@ public sealed class NetClient : INetClient
             "token"   => Task.FromResult(token ?? string.Empty),
             _         => Task.FromResult(string.Empty),
         };
-        return new NetClient(Resolver, "inline", httpClient);
+        return new NetClient(Resolver, "inline", httpClient, jsonOptions: jsonOptions);
     }
 
     /// <inheritdoc/>
-    public Task<HttpResponseMessage> GetAsync(string path, CancellationToken cancellationToken = default)
-        => SendAsync(new HttpRequestMessage(HttpMethod.Get, path), cancellationToken);
+    public Task<HttpResponseMessage> GetAsync(string path, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => SendCoreAsync(HttpMethod.Get, path, content: null, options, cancellationToken);
 
     /// <inheritdoc/>
-    public Task<HttpResponseMessage> PostAsync(string path, HttpContent? content, CancellationToken cancellationToken = default)
-        => SendAsync(new HttpRequestMessage(HttpMethod.Post, path) { Content = content }, cancellationToken);
+    public Task<HttpResponseMessage> PostAsync(string path, HttpContent? content, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => SendCoreAsync(HttpMethod.Post, path, content, options, cancellationToken);
 
     /// <inheritdoc/>
-    public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken = default)
+    public Task<HttpResponseMessage> PutAsync(string path, HttpContent? content, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => SendCoreAsync(HttpMethod.Put, path, content, options, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<HttpResponseMessage> PatchAsync(string path, HttpContent? content, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => SendCoreAsync(HttpMethod.Patch, path, content, options, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<HttpResponseMessage> DeleteAsync(string path, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => SendCoreAsync(HttpMethod.Delete, path, content: null, options, cancellationToken);
+
+    /// <inheritdoc/>
+    public async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, RequestOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
         await EnsureHydratedAsync(cancellationToken).ConfigureAwait(false);
 
-        if (request.RequestUri is { IsAbsoluteUri: false } && _http.BaseAddress is not null)
-        {
-            request.RequestUri = new Uri(_http.BaseAddress, request.RequestUri);
-        }
+        ApplyBaseAddress(request);
+        ApplyQuery(request, options?.Query);
+        ApplyHeaders(request, options?.Headers);
 
-        return await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return await SendWithPolicyAsync(_ => CloneRequest(request), options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
-    public async Task<string> GetStringAsync(string path, CancellationToken cancellationToken = default)
+    public async Task<string> GetStringAsync(string path, RequestOptions? options = null, CancellationToken cancellationToken = default)
     {
-        using var response = await GetAsync(path, cancellationToken).ConfigureAwait(false);
+        using var response = await GetAsync(path, options, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
-    public async Task<T?> GetJsonAsync<T>(string path, CancellationToken cancellationToken = default)
-    {
-        using var response = await GetAsync(path, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions, cancellationToken).ConfigureAwait(false);
-    }
+    public Task<T?> GetJsonAsync<T>(string path, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => ReadJsonAsync<T>(GetAsync(path, options, cancellationToken), cancellationToken);
 
     /// <inheritdoc/>
-    public async Task<TResponse?> PostJsonAsync<TResponse>(string path, object? payload, CancellationToken cancellationToken = default)
-    {
-        var body = payload is null
-            ? null
-            : new StringContent(JsonSerializer.Serialize(payload, JsonOptions), Encoding.UTF8, "application/json");
+    public Task<TResponse?> PostJsonAsync<TResponse>(string path, object? payload, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => ReadJsonAsync<TResponse>(PostAsync(path, BuildJsonContent(payload), options, cancellationToken), cancellationToken);
 
-        using var response = await PostAsync(path, body, cancellationToken).ConfigureAwait(false);
+    /// <inheritdoc/>
+    public Task<TResponse?> PutJsonAsync<TResponse>(string path, object? payload, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => ReadJsonAsync<TResponse>(PutAsync(path, BuildJsonContent(payload), options, cancellationToken), cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<TResponse?> PatchJsonAsync<TResponse>(string path, object? payload, RequestOptions? options = null, CancellationToken cancellationToken = default)
+        => ReadJsonAsync<TResponse>(PatchAsync(path, BuildJsonContent(payload), options, cancellationToken), cancellationToken);
+
+    private HttpContent? BuildJsonContent(object? payload)
+        => payload is null
+            ? null
+            : new StringContent(JsonSerializer.Serialize(payload, _jsonOptions), Encoding.UTF8, "application/json");
+
+    private async Task<T?> ReadJsonAsync<T>(Task<HttpResponseMessage> responseTask, CancellationToken ct)
+    {
+        using var response = await responseTask.ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        return await JsonSerializer.DeserializeAsync<TResponse>(stream, JsonOptions, cancellationToken).ConfigureAwait(false);
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        if (stream.CanSeek && stream.Length == 0) return default;
+        return await JsonSerializer.DeserializeAsync<T>(stream, _jsonOptions, ct).ConfigureAwait(false);
     }
 
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private async Task<HttpResponseMessage> SendCoreAsync(
+        HttpMethod method, string path, HttpContent? content, RequestOptions? options, CancellationToken cancellationToken)
+    {
+        await EnsureHydratedAsync(cancellationToken).ConfigureAwait(false);
+
+        return await SendWithPolicyAsync(_ =>
+        {
+            var request = new HttpRequestMessage(method, path);
+            if (content is not null) request.Content = content;
+            ApplyBaseAddress(request);
+            ApplyQuery(request, options?.Query);
+            ApplyHeaders(request, options?.Headers);
+            return request;
+        }, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<HttpResponseMessage> SendWithPolicyAsync(
+        Func<int, HttpRequestMessage> requestFactory,
+        RequestOptions? options,
+        CancellationToken cancellationToken)
+    {
+        var retries = options?.RetryCount ?? _defaultRetryCount;
+        var baseDelay = options?.RetryBaseDelay ?? _defaultRetryBaseDelay;
+        var timeout = options?.Timeout;
+
+        HttpResponseMessage? response = null;
+        Exception? lastError = null;
+
+        for (var attempt = 0; attempt <= retries; attempt++)
+        {
+            response?.Dispose();
+            response = null;
+            lastError = null;
+
+            using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            if (timeout is { } t) requestCts.CancelAfter(t);
+
+            var request = requestFactory(attempt);
+            try
+            {
+                response = await _http.SendAsync(request, requestCts.Token).ConfigureAwait(false);
+                if (!IsTransient(response.StatusCode)) return response;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException || ex is OperationCanceledException)
+            {
+                lastError = ex;
+            }
+
+            if (attempt == retries) break;
+
+            var delay = ComputeBackoff(baseDelay, attempt, response);
+            try
+            {
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+
+        if (response is not null) return response;
+        throw lastError ?? new HttpRequestException($"NetworkBlaster: request to '{ConnectionName}' failed after {retries + 1} attempt(s).");
+    }
+
+    private static bool IsTransient(HttpStatusCode status)
+        => (int)status >= 500
+           || status == HttpStatusCode.RequestTimeout    // 408
+           || status == HttpStatusCode.TooManyRequests;  // 429
+
+    private static TimeSpan ComputeBackoff(TimeSpan baseDelay, int attempt, HttpResponseMessage? response)
+    {
+        if (response?.Headers.RetryAfter is { } retryAfter)
+        {
+            if (retryAfter.Delta is { } d && d > TimeSpan.Zero) return d;
+            if (retryAfter.Date is { } when_)
+            {
+                var until = when_ - DateTimeOffset.UtcNow;
+                if (until > TimeSpan.Zero) return until;
+            }
+        }
+
+        var exponential = TimeSpan.FromMilliseconds(baseDelay.TotalMilliseconds * Math.Pow(2, attempt));
+        var jitterMs = Random.Shared.Next(0, 50);
+        return exponential + TimeSpan.FromMilliseconds(jitterMs);
+    }
+
+    private void ApplyBaseAddress(HttpRequestMessage request)
+    {
+        if (request.RequestUri is { IsAbsoluteUri: false } && _http.BaseAddress is not null)
+        {
+            request.RequestUri = new Uri(_http.BaseAddress, request.RequestUri);
+        }
+    }
+
+    private static void ApplyQuery(HttpRequestMessage request, IReadOnlyDictionary<string, string?>? query)
+    {
+        if (query is null || query.Count == 0 || request.RequestUri is null) return;
+
+        var uri = request.RequestUri;
+        var builder = uri.IsAbsoluteUri
+            ? new UriBuilder(uri)
+            : new UriBuilder(new Uri("http://placeholder/" + uri.OriginalString));
+
+        var separator = string.IsNullOrEmpty(builder.Query) ? "" : builder.Query.TrimStart('?') + "&";
+        var sb = new StringBuilder(separator);
+        var first = sb.Length == 0;
+        foreach (var kvp in query)
+        {
+            if (kvp.Value is null) continue;
+            if (!first) sb.Append('&');
+            sb.Append(Uri.EscapeDataString(kvp.Key)).Append('=').Append(Uri.EscapeDataString(kvp.Value));
+            first = false;
+        }
+        builder.Query = sb.ToString();
+
+        request.RequestUri = uri.IsAbsoluteUri
+            ? builder.Uri
+            : new Uri(builder.Uri.PathAndQuery + builder.Uri.Fragment, UriKind.Relative);
+    }
+
+    private static void ApplyHeaders(HttpRequestMessage request, IReadOnlyDictionary<string, string?>? headers)
+    {
+        if (headers is null || headers.Count == 0) return;
+
+        foreach (var (key, value) in headers)
+        {
+            if (value is null) continue;
+            if (!request.Headers.TryAddWithoutValidation(key, value) && request.Content is not null)
+            {
+                request.Content.Headers.TryAddWithoutValidation(key, value);
+            }
+        }
+    }
+
+    private static HttpRequestMessage CloneRequest(HttpRequestMessage source)
+    {
+        var clone = new HttpRequestMessage(source.Method, source.RequestUri) { Version = source.Version };
+        foreach (var header in source.Headers) clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        clone.Content = source.Content;
+        return clone;
+    }
 
     private async Task EnsureHydratedAsync(CancellationToken ct)
     {

@@ -20,22 +20,37 @@ public interface INetClient
     string ConnectionName { get; }
 
     /// <summary>Issues a GET against <paramref name="path"/> relative to the connection's base URL.</summary>
-    Task<HttpResponseMessage> GetAsync(string path, CancellationToken cancellationToken = default);
+    Task<HttpResponseMessage> GetAsync(string path, RequestOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>Issues a POST with the supplied content against <paramref name="path"/>.</summary>
-    Task<HttpResponseMessage> PostAsync(string path, HttpContent? content, CancellationToken cancellationToken = default);
+    Task<HttpResponseMessage> PostAsync(string path, HttpContent? content, RequestOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Issues a PUT with the supplied content against <paramref name="path"/>.</summary>
+    Task<HttpResponseMessage> PutAsync(string path, HttpContent? content, RequestOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Issues a PATCH with the supplied content against <paramref name="path"/>.</summary>
+    Task<HttpResponseMessage> PatchAsync(string path, HttpContent? content, RequestOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Issues a DELETE against <paramref name="path"/>.</summary>
+    Task<HttpResponseMessage> DeleteAsync(string path, RequestOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>Issues an arbitrary <see cref="HttpRequestMessage"/> with auth + base address applied.</summary>
-    Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken = default);
+    Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, RequestOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>Convenience: GET <paramref name="path"/> and return the response body as a string.</summary>
-    Task<string> GetStringAsync(string path, CancellationToken cancellationToken = default);
+    Task<string> GetStringAsync(string path, RequestOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>Convenience: GET <paramref name="path"/> and deserialize the JSON body to <typeparamref name="T"/>.</summary>
-    Task<T?> GetJsonAsync<T>(string path, CancellationToken cancellationToken = default);
+    Task<T?> GetJsonAsync<T>(string path, RequestOptions? options = null, CancellationToken cancellationToken = default);
 
     /// <summary>Convenience: POST <paramref name="payload"/> as JSON and deserialize the response to <typeparamref name="TResponse"/>.</summary>
-    Task<TResponse?> PostJsonAsync<TResponse>(string path, object? payload, CancellationToken cancellationToken = default);
+    Task<TResponse?> PostJsonAsync<TResponse>(string path, object? payload, RequestOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Convenience: PUT <paramref name="payload"/> as JSON and deserialize the response to <typeparamref name="TResponse"/>.</summary>
+    Task<TResponse?> PutJsonAsync<TResponse>(string path, object? payload, RequestOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>Convenience: PATCH <paramref name="payload"/> as JSON and deserialize the response to <typeparamref name="TResponse"/>.</summary>
+    Task<TResponse?> PatchJsonAsync<TResponse>(string path, object? payload, RequestOptions? options = null, CancellationToken cancellationToken = default);
 }
 
 #pragma warning restore CA1716

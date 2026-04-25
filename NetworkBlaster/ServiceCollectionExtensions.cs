@@ -45,7 +45,10 @@ public static class ServiceCollectionExtensions
                 options.ConnectionName,
                 httpClient: null,
                 baseUrlKey: options.BaseUrlKey,
-                tokenKey: options.TokenKey));
+                tokenKey: options.TokenKey,
+                jsonOptions: options.JsonOptions,
+                defaultRetryCount: options.DefaultRetryCount,
+                defaultRetryBaseDelay: options.DefaultRetryBaseDelay));
 
         return services;
     }
