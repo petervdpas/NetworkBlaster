@@ -12,9 +12,9 @@ Think "Postman as a library": named connections, lazy auth, script-friendly defa
 
 ---
 
-> ✅ **Status:** 0.2 — verbs (GET/POST/PUT/PATCH/DELETE + JSON twins), per-request
-> headers / query / timeout, retry policy, configurable JSON, four script-friendly
-> auth factories. 44 tests green.
+> ✅ **Status:** 0.3 — adds **typed OData v4** support on top of v0.2: LINQ-flavored
+> chainable queries, typed filter DSL, auto-paging `IAsyncEnumerable<T>`, and a
+> string/expression-friendly query builder. 177 tests green.
 
 ---
 
@@ -26,6 +26,7 @@ Think "Postman as a library": named connections, lazy auth, script-friendly defa
 * 🔹 **Lazy hydration** — base URL and auth are resolved on first request, then cached.
 * 🔹 **Built-in resilience** — opt-in retry on 5xx / 408 / 429 / network errors, with `Retry-After` honored, plus per-request timeout.
 * 🔹 **JSON helpers in the box** — `GetJsonAsync<T>` / `PostJsonAsync<T>` / `PutJsonAsync<T>` / `PatchJsonAsync<T>`, with configurable `JsonSerializerOptions`.
+* 🔹 **Typed OData v4** — LINQ-flavored chain (`.Where(c => c.Status == "Active")`), auto-paging `IAsyncEnumerable<T>`, and a vault-agnostic filter DSL with operator overloads.
 
 ---
 
@@ -42,7 +43,7 @@ dotnet add package NetworkBlaster
 ### `.csx` — bearer token, no vault
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.2.0"
+#r "nuget: NetworkBlaster, 0.3.0"
 using NetworkBlaster;
 
 var gh = NetClient.WithToken("https://api.github.com/", "ghp_xxx");
@@ -53,7 +54,7 @@ Console.WriteLine(body);
 ### `.csx` — API-key header
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.2.0"
+#r "nuget: NetworkBlaster, 0.3.0"
 using NetworkBlaster;
 
 var api = NetClient.WithApiKey("https://api.example.com/", "X-API-Key", "secret");
@@ -72,7 +73,7 @@ var issue = await jira.GetJsonAsync<JiraIssue>("rest/api/3/issue/PROJ-123");
 ### `.csx` inside TaskBlaster — resolver from `Secrets`
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.2.0"
+#r "nuget: NetworkBlaster, 0.3.0"
 using NetworkBlaster;
 
 var gh = new NetClient(Secrets.Resolver, "github");
@@ -159,6 +160,85 @@ await client.GetAsync("slow", Options.Timeout(TimeSpan.FromSeconds(5)), cts.Toke
 ```
 
 If the caller cancels before the timeout fires, the caller's cancellation wins.
+
+---
+
+## 🧮 OData v4 (typed, with auto-paging)
+
+NetworkBlaster ships first-class support for OData v4 query options and pagination. The headline path is the typed LINQ-flavored chain on `INetClient.OData<T>(path)`:
+
+```csharp
+using NetworkBlaster;
+using NetworkBlaster.OData;
+
+var customers = client
+    .OData<Customer>("Customers")
+    .Where(c => c.Status == "Active" && c.Age > 18)
+    .OrderBy(c => c.Name)
+    .ThenByDescending(c => c.Id)
+    .Select(c => c.Id, c => c.Name)
+    .Top(50);
+
+await foreach (var c in customers)            // IAsyncEnumerable<T>, auto-pages via @odata.nextLink
+    Console.WriteLine(c.Name);
+
+var first = await customers.FirstOrDefaultAsync();
+var all   = await customers.ToListAsync();
+var page  = await customers.FirstPageAsync(); // ODataPage<T> { Value, Count, NextLink, Context }
+var n     = await customers.WithCount().CountAsync();
+
+record Customer(int Id, string Status, string Name, int Age);
+```
+
+### Filter DSL — three styles, all interchangeable
+
+```csharp
+// 1. Typed LINQ predicate (translated to OData $filter)
+client.OData<Customer>("Customers").Where(c => c.Status == "Active" && c.CreatedOn > date);
+
+// 2. Static factories with operator overloads
+var f = ODataFilter.Eq("Status", "Active") & ODataFilter.Gt("CreatedOn", date);
+client.OData<Customer>("Customers").Where(f);
+
+// 3. Raw string fallback
+client.OData<Customer>("Customers").Where("Status eq 'Active'");
+```
+
+The LINQ translator supports `==`, `!=`, `>`, `<`, `>=`, `<=`, `&&`, `||`, `!`, nested member access (`c.Address.City` → `Address/City`), `string.Contains` / `StartsWith` / `EndsWith`, and closure-captured constants. Strings, dates, GUIDs, bools, and numbers are auto-rendered as proper OData literals (apostrophes inside strings are doubled, dates are ISO-8601, GUIDs are bare).
+
+### Builder API (typed *or* string-based)
+
+For ad-hoc / dynamic / hand-rolled paths, `ODataQuery` is a plain immutable record builder:
+
+```csharp
+var q = ODataQuery
+    .Filter<Customer>(c => c.Status == "Active")   // typed
+    .Select<Customer>(c => c.Id, c => c.Name)
+    .OrderBy<Customer>(c => c.Name)
+    .OrderByDescending<Customer>(c => c.Id)        // multiple OrderBy = ThenBy semantics
+    .Top(50)
+    .Count();
+
+var page = await client.GetODataAsync<Customer>("Customers", q);
+await foreach (var c in client.QueryODataAsync<Customer>("Customers", q)) { /* ... */ }
+```
+
+Every method has both a typed (`Expression<Func<T, object?>>`) and a string overload, so you can drop into raw OData when you need `Address/City` on a service with no entity model.
+
+### Single-entity fetch
+
+```csharp
+var one = await client.GetODataItemAsync<Customer>("Customers(42)");
+```
+
+### Literal helpers (raw filter authoring)
+
+```csharp
+ODataLiteral.String("O'Brien")          // → 'O''Brien'
+ODataLiteral.DateTimeOffset(DateTime.Now)
+ODataLiteral.Guid(Guid.NewGuid())
+ODataLiteral.From(any)                  // dispatches by type
+```
 
 ---
 
@@ -269,6 +349,127 @@ public static class RequestOptionsExtensions
 {
     public static RequestOptions AddQuery (this RequestOptions o, string name, string? value);
     public static RequestOptions AddHeader(this RequestOptions o, string name, string? value);
+}
+
+// ---------- OData v4 ----------
+
+namespace NetworkBlaster.OData;
+
+public sealed record ODataPage<T>
+{
+    public IReadOnlyList<T> Value     { get; init; }
+    public long?            Count     { get; init; }
+    public string?          NextLink  { get; init; }
+    public string?          Context   { get; init; }
+}
+
+public abstract record ODataFilter
+{
+    public abstract string Render();
+
+    // comparison
+    public static ODataFilter Eq(string field, object? value);
+    public static ODataFilter Ne(string field, object? value);
+    public static ODataFilter Gt(string field, object? value);
+    public static ODataFilter Lt(string field, object? value);
+    public static ODataFilter Ge(string field, object? value);
+    public static ODataFilter Le(string field, object? value);
+
+    // string functions
+    public static ODataFilter Contains  (string field, string value);
+    public static ODataFilter StartsWith(string field, string value);
+    public static ODataFilter EndsWith  (string field, string value);
+
+    // collection / logical
+    public static ODataFilter In (string field, params object?[] values);
+    public static ODataFilter And(ODataFilter left, ODataFilter right);
+    public static ODataFilter Or (ODataFilter left, ODataFilter right);
+    public static ODataFilter Not(ODataFilter inner);
+    public static ODataFilter Raw(string expression);
+
+    // LINQ entry-point
+    public static ODataFilter For<T>(Expression<Func<T, bool>> predicate);
+
+    // operator overloads: &  |  !
+}
+
+public sealed record ODataQuery
+{
+    public static ODataQuery Empty { get; }
+
+    public static ODataQuery Filter (string expression);
+    public static ODataQuery Filter (ODataFilter filter);
+    public static ODataQuery Filter<T>(Expression<Func<T, bool>> predicate);
+
+    public ODataQuery WithFilter(string expression);
+    public ODataQuery WithFilter(ODataFilter filter);
+    public ODataQuery WithFilter<T>(Expression<Func<T, bool>> predicate);
+
+    public ODataQuery Select   (params string[] fields);
+    public ODataQuery Select<T>(params Expression<Func<T, object?>>[] fields);
+    public ODataQuery Expand   (params string[] navigations);
+    public ODataQuery Expand<T>(params Expression<Func<T, object?>>[] navigations);
+
+    public ODataQuery OrderBy           (string field, bool descending = false);
+    public ODataQuery OrderBy<T>        (Expression<Func<T, object?>> selector, bool descending = false);
+    public ODataQuery OrderByDescending (string field);
+    public ODataQuery OrderByDescending<T>(Expression<Func<T, object?>> selector);
+
+    public ODataQuery Top    (int count);
+    public ODataQuery Skip   (int count);
+    public ODataQuery Search (string text);
+    public ODataQuery Count  (bool include = true);
+
+    public IReadOnlyDictionary<string, string?> Build();
+    public RequestOptions ToRequestOptions();
+}
+
+public sealed class ODataRequest<T> : IAsyncEnumerable<T>
+{
+    public ODataRequest<T> Where(Expression<Func<T, bool>> predicate);
+    public ODataRequest<T> Where(ODataFilter filter);
+    public ODataRequest<T> Where(string rawExpression);
+
+    public ODataRequest<T> OrderBy           (Expression<Func<T, object?>> selector);
+    public ODataRequest<T> OrderByDescending (Expression<Func<T, object?>> selector);
+    public ODataRequest<T> ThenBy            (Expression<Func<T, object?>> selector);
+    public ODataRequest<T> ThenByDescending  (Expression<Func<T, object?>> selector);
+
+    public ODataRequest<T> Select (params Expression<Func<T, object?>>[] fields);
+    public ODataRequest<T> Expand (params Expression<Func<T, object?>>[] navigations);
+
+    public ODataRequest<T> Top       (int count);
+    public ODataRequest<T> Skip      (int count);
+    public ODataRequest<T> Search    (string text);
+    public ODataRequest<T> WithCount (bool include = true);
+
+    // terminals
+    public Task<ODataPage<T>>    FirstPageAsync       (CancellationToken ct = default);
+    public Task<IReadOnlyList<T>> ToListAsync          (CancellationToken ct = default);
+    public Task<T?>              FirstOrDefaultAsync  (CancellationToken ct = default);
+    public Task<T?>              SingleOrDefaultAsync (CancellationToken ct = default);
+    public Task<long>            CountAsync           (CancellationToken ct = default);
+}
+
+public static class ODataExtensions
+{
+    public static ODataRequest<T>     OData<T>            (this INetClient client, string path);
+    public static Task<ODataPage<T>>  GetODataAsync<T>    (this INetClient client, string path, ODataQuery? query = null, RequestOptions? options = null, CancellationToken ct = default);
+    public static Task<T?>            GetODataItemAsync<T>(this INetClient client, string path, ODataQuery? query = null, RequestOptions? options = null, CancellationToken ct = default);
+    public static IAsyncEnumerable<T> QueryODataAsync<T>  (this INetClient client, string path, ODataQuery? query = null, RequestOptions? options = null, CancellationToken ct = default);
+}
+
+public static class ODataLiteral
+{
+    public static string String         (string value);
+    public static string DateTimeOffset (DateTimeOffset value);
+    public static string DateTime       (DateTime value);
+    public static string Date           (DateOnly value);
+    public static string Time           (TimeOnly value);
+    public static string Guid           (Guid value);
+    public static string Bool           (bool value);
+    public static string Number         (IFormattable value);
+    public static string From           (object? value);
 }
 ```
 
