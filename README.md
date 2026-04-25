@@ -12,9 +12,10 @@ Think "Postman as a library": named connections, lazy auth, script-friendly defa
 
 ---
 
-> ✅ **Status:** 0.3 — adds **typed OData v4** support on top of v0.2: LINQ-flavored
-> chainable queries, typed filter DSL, auto-paging `IAsyncEnumerable<T>`, and a
-> string/expression-friendly query builder. 177 tests green.
+> ✅ **Status:** 0.4 — adds **first-class auth** beyond bearer/basic/api-key:
+> OAuth2 client-credentials with token caching + refresh, API key in query
+> string, NTLM / Windows Integrated Auth, and a server-managed cookie jar.
+> 205 tests green.
 
 ---
 
@@ -27,6 +28,7 @@ Think "Postman as a library": named connections, lazy auth, script-friendly defa
 * 🔹 **Built-in resilience** — opt-in retry on 5xx / 408 / 429 / network errors, with `Retry-After` honored, plus per-request timeout.
 * 🔹 **JSON helpers in the box** — `GetJsonAsync<T>` / `PostJsonAsync<T>` / `PutJsonAsync<T>` / `PatchJsonAsync<T>`, with configurable `JsonSerializerOptions`.
 * 🔹 **Typed OData v4** — LINQ-flavored chain (`.Where(c => c.Status == "Active")`), auto-paging `IAsyncEnumerable<T>`, and a vault-agnostic filter DSL with operator overloads.
+* 🔹 **Real-world auth** — bearer, basic, API key (header *or* query), OAuth2 client-credentials with token caching + refresh, NTLM / Windows auth, and a cookie jar.
 
 ---
 
@@ -43,7 +45,7 @@ dotnet add package NetworkBlaster
 ### `.csx` — bearer token, no vault
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.3.0"
+#r "nuget: NetworkBlaster, 0.4.0"
 using NetworkBlaster;
 
 var gh = NetClient.WithToken("https://api.github.com/", "ghp_xxx");
@@ -54,7 +56,7 @@ Console.WriteLine(body);
 ### `.csx` — API-key header
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.3.0"
+#r "nuget: NetworkBlaster, 0.4.0"
 using NetworkBlaster;
 
 var api = NetClient.WithApiKey("https://api.example.com/", "X-API-Key", "secret");
@@ -70,10 +72,55 @@ var jira = NetClient.WithBasicAuth("https://acme.atlassian.net/", "alice@acme.co
 var issue = await jira.GetJsonAsync<JiraIssue>("rest/api/3/issue/PROJ-123");
 ```
 
+### `.csx` — API key in the query string
+
+```csharp
+var weather = NetClient.WithApiKeyQuery("https://api.openweathermap.org/", "appid", "abc123");
+var paris = await weather.GetStringAsync("data/2.5/weather?q=Paris");
+```
+
+### `.csx` — OAuth2 client credentials (token cached + auto-refresh)
+
+```csharp
+#r "nuget: NetworkBlaster, 0.4.0"
+using NetworkBlaster;
+
+var graph = NetClient.WithOAuth2ClientCredentials(
+    baseUrl:       "https://graph.microsoft.com/v1.0/",
+    tokenEndpoint: "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+    clientId:      "...",
+    clientSecret:  "...",
+    scope:         "https://graph.microsoft.com/.default");
+
+var users = await graph.GetJsonAsync<GraphUsers>("users");
+```
+
+The token is fetched on first request, cached for its `expires_in` lifetime, refreshed automatically before expiry, and re-fetched once on a `401 Unauthorized` response in case it went stale mid-flight.
+
+### `.csx` — Windows Integrated Auth (NTLM / Negotiate / Kerberos)
+
+```csharp
+var intranet = NetClient.WithWindowsAuth("https://intranet.acme.corp/api/");
+// or with explicit creds:
+var creds = new NetworkCredential("svc-account", "p@ssw0rd", "CORP");
+var intranet = NetClient.WithWindowsAuth("https://intranet.acme.corp/api/", creds);
+```
+
+### `.csx` — Cookie jar (login + session)
+
+```csharp
+var jar = new CookieContainer();
+var site = NetClient.WithCookieJar("https://legacy-portal.example.test/", jar);
+
+await site.PostJsonAsync<object>("login", new { user = "alice", pass = "..." });
+// session cookie set by the server is auto-replayed on follow-up calls:
+var report = await site.GetJsonAsync<Report>("reports/today");
+```
+
 ### `.csx` inside TaskBlaster — resolver from `Secrets`
 
 ```csharp
-#r "nuget: NetworkBlaster, 0.3.0"
+#r "nuget: NetworkBlaster, 0.4.0"
 using NetworkBlaster;
 
 var gh = new NetClient(Secrets.Resolver, "github");
@@ -324,6 +371,31 @@ public sealed class NetClient : INetClient
 
     // chainable defaults
     public NetClient WithDefaultHeader(string name, string value);
+    public NetClient WithDefaultQuery (string name, string value);
+
+    // additional auth factories (v0.4)
+    public static NetClient WithApiKeyQuery       (string baseUrl, string paramName, string apiKey, HttpClient? http = null, JsonSerializerOptions? json = null);
+    public static NetClient WithWindowsAuth       (string baseUrl, JsonSerializerOptions? json = null);
+    public static NetClient WithWindowsAuth       (string baseUrl, NetworkCredential credentials, JsonSerializerOptions? json = null);
+    public static NetClient WithCookieJar         (string baseUrl, CookieContainer? cookies = null, JsonSerializerOptions? json = null);
+    public static NetClient WithOAuth2ClientCredentials(
+        string baseUrl, string tokenEndpoint, string clientId, string clientSecret,
+        string? scope = null, HttpClient? tokenClient = null, JsonSerializerOptions? json = null);
+    public static NetClient WithOAuth2(string baseUrl, OAuth2TokenProvider provider, JsonSerializerOptions? json = null);
+}
+
+// ---------- OAuth2 building blocks ----------
+
+namespace NetworkBlaster.Auth;
+
+public sealed class OAuth2TokenProvider
+{
+    public OAuth2TokenProvider(
+        Uri tokenEndpoint, string clientId, string clientSecret,
+        string? scope = null, HttpClient? httpClient = null);
+
+    public Task<string> GetAccessTokenAsync(CancellationToken ct = default);
+    public Task         InvalidateAsync();
 }
 
 public sealed record RequestOptions

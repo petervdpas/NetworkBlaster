@@ -37,6 +37,7 @@ public sealed class NetClient : INetClient
     private readonly int _defaultRetryCount;
     private readonly TimeSpan _defaultRetryBaseDelay;
     private readonly SemaphoreSlim _hydrateLock = new(1, 1);
+    private readonly Dictionary<string, string?> _defaultQuery = new(StringComparer.OrdinalIgnoreCase);
     private bool _hydrated;
 
     /// <inheritdoc/>
@@ -143,6 +144,145 @@ public sealed class NetClient : INetClient
         return this;
     }
 
+    /// <summary>
+    /// Adds a default query-string parameter sent on every request. Per-request
+    /// values from <see cref="RequestOptions.Query"/> override the default on key collision.
+    /// </summary>
+    public NetClient WithDefaultQuery(string name, string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(value);
+        _defaultQuery[name] = value;
+        return this;
+    }
+
+    /// <summary>
+    /// Script-friendly factory: a client that appends a fixed API-key parameter
+    /// (e.g. <c>?api_key=...</c>) to every request URL.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// var w = NetClient.WithApiKeyQuery("https://api.weather.example/", "appid", "abc123");
+    /// var json = await w.GetStringAsync("data/2.5/weather?q=Paris");
+    /// </code>
+    /// </example>
+    public static NetClient WithApiKeyQuery(
+        string baseUrl,
+        string paramName,
+        string apiKey,
+        HttpClient? httpClient = null,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(paramName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
+        var client = Inline(baseUrl, token: null, httpClient, jsonOptions);
+        client._defaultQuery[paramName] = apiKey;
+        return client;
+    }
+
+    /// <summary>
+    /// Script-friendly factory: a client that authenticates with the current Windows
+    /// user's credentials (NTLM / Negotiate / Kerberos). Typically used inside corporate
+    /// intranets.
+    /// </summary>
+    public static NetClient WithWindowsAuth(
+        string baseUrl,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        var handler = new HttpClientHandler { UseDefaultCredentials = true };
+        return Inline(baseUrl, token: null, new HttpClient(handler), jsonOptions);
+    }
+
+    /// <summary>
+    /// Script-friendly factory: a client that authenticates using the supplied
+    /// Windows credentials (NTLM / Negotiate / Kerberos).
+    /// </summary>
+    public static NetClient WithWindowsAuth(
+        string baseUrl,
+        System.Net.NetworkCredential credentials,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        ArgumentNullException.ThrowIfNull(credentials);
+        var handler = new HttpClientHandler { Credentials = credentials, UseDefaultCredentials = false };
+        return Inline(baseUrl, token: null, new HttpClient(handler), jsonOptions);
+    }
+
+    /// <summary>
+    /// Script-friendly factory: a client with an attached cookie jar. Cookies set by
+    /// the server (via <c>Set-Cookie</c>) are automatically replayed on follow-up
+    /// requests. Pass an existing <see cref="CookieContainer"/> to share state across clients.
+    /// </summary>
+    public static NetClient WithCookieJar(
+        string baseUrl,
+        System.Net.CookieContainer? cookies = null,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        var handler = new HttpClientHandler
+        {
+            UseCookies = true,
+            CookieContainer = cookies ?? new System.Net.CookieContainer(),
+        };
+        return Inline(baseUrl, token: null, new HttpClient(handler), jsonOptions);
+    }
+
+    /// <summary>
+    /// Script-friendly factory: a client that authenticates with OAuth2
+    /// <c>client_credentials</c>. Tokens are fetched from <paramref name="tokenEndpoint"/>,
+    /// cached, refreshed before expiry, and re-fetched once on a 401 response.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// var graph = NetClient.WithOAuth2ClientCredentials(
+    ///     baseUrl:       "https://graph.microsoft.com/v1.0/",
+    ///     tokenEndpoint: "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+    ///     clientId:      "...",
+    ///     clientSecret:  "...",
+    ///     scope:         "https://graph.microsoft.com/.default");
+    ///
+    /// var me = await graph.GetJsonAsync&lt;User&gt;("me");
+    /// </code>
+    /// </example>
+    public static NetClient WithOAuth2ClientCredentials(
+        string baseUrl,
+        string tokenEndpoint,
+        string clientId,
+        string clientSecret,
+        string? scope = null,
+        HttpClient? tokenClient = null,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tokenEndpoint);
+
+        var provider = new Auth.OAuth2TokenProvider(
+            new Uri(tokenEndpoint, UriKind.Absolute),
+            clientId,
+            clientSecret,
+            scope,
+            tokenClient);
+
+        var handler = new Auth.OAuth2DelegatingHandler(provider, new HttpClientHandler());
+        return Inline(baseUrl, token: null, new HttpClient(handler), jsonOptions);
+    }
+
+    /// <summary>
+    /// Variant of <see cref="WithOAuth2ClientCredentials(string, string, string, string, string?, HttpClient?, JsonSerializerOptions?)"/>
+    /// that lets you supply a pre-built <see cref="Auth.OAuth2TokenProvider"/>, e.g. to share a token cache across clients.
+    /// </summary>
+    public static NetClient WithOAuth2(
+        string baseUrl,
+        Auth.OAuth2TokenProvider provider,
+        JsonSerializerOptions? jsonOptions = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
+        ArgumentNullException.ThrowIfNull(provider);
+        var handler = new Auth.OAuth2DelegatingHandler(provider, new HttpClientHandler());
+        return Inline(baseUrl, token: null, new HttpClient(handler), jsonOptions);
+    }
+
     private static NetClient Inline(string baseUrl, string? token, HttpClient? httpClient, JsonSerializerOptions? jsonOptions)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseUrl);
@@ -183,7 +323,7 @@ public sealed class NetClient : INetClient
         await EnsureHydratedAsync(cancellationToken).ConfigureAwait(false);
 
         ApplyBaseAddress(request);
-        ApplyQuery(request, options?.Query);
+        ApplyQuery(request, MergeQuery(options?.Query));
         ApplyHeaders(request, options?.Headers);
 
         return await SendWithPolicyAsync(_ => CloneRequest(request), options, cancellationToken).ConfigureAwait(false);
@@ -237,7 +377,7 @@ public sealed class NetClient : INetClient
             var request = new HttpRequestMessage(method, path);
             if (content is not null) request.Content = content;
             ApplyBaseAddress(request);
-            ApplyQuery(request, options?.Query);
+            ApplyQuery(request, MergeQuery(options?.Query));
             ApplyHeaders(request, options?.Headers);
             return request;
         }, options, cancellationToken).ConfigureAwait(false);
@@ -324,6 +464,16 @@ public sealed class NetClient : INetClient
         {
             request.RequestUri = new Uri(_http.BaseAddress, request.RequestUri);
         }
+    }
+
+    private IReadOnlyDictionary<string, string?>? MergeQuery(IReadOnlyDictionary<string, string?>? perRequest)
+    {
+        if (_defaultQuery.Count == 0) return perRequest;
+        if (perRequest is null || perRequest.Count == 0) return _defaultQuery;
+
+        var merged = new Dictionary<string, string?>(_defaultQuery, StringComparer.OrdinalIgnoreCase);
+        foreach (var (k, v) in perRequest) merged[k] = v;
+        return merged;
     }
 
     private static void ApplyQuery(HttpRequestMessage request, IReadOnlyDictionary<string, string?>? query)
