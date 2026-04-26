@@ -1,12 +1,12 @@
-# NetworkBlaster 🌐
+# NetworkBlast 🌐
 
-[![NuGet](https://img.shields.io/nuget/v/NetworkBlaster.svg)](https://www.nuget.org/packages/NetworkBlaster)
-[![NuGet Downloads](https://img.shields.io/nuget/dt/NetworkBlaster.svg)](https://www.nuget.org/packages/NetworkBlaster)
-[![License](https://img.shields.io/github/license/petervdpas/NetworkBlaster.svg)](https://opensource.org/licenses/MIT)
+[![NuGet](https://img.shields.io/nuget/v/NetworkBlast.svg)](https://www.nuget.org/packages/NetworkBlast)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/NetworkBlast.svg)](https://www.nuget.org/packages/NetworkBlast)
+[![License](https://img.shields.io/github/license/petervdpas/NetworkBlast.svg)](https://opensource.org/licenses/MIT)
 
-![NetworkBlaster](https://raw.githubusercontent.com/petervdpas/NetworkBlaster/master/assets/icon.png)
+![NetworkBlast](https://raw.githubusercontent.com/petervdpas/NetworkBlast/master/assets/icon.png)
 
-**NetworkBlaster** is a programmable HTTP/REST client for .NET — a sibling to
+**NetworkBlast** is a programmable HTTP/REST client for .NET — a sibling to
 [AzureBlast](https://www.nuget.org/packages/AzureBlast) in the Blast family.
 Think "Postman as a library": named connections, lazy auth, script-friendly defaults.
 
@@ -19,7 +19,7 @@ Think "Postman as a library": named connections, lazy auth, script-friendly defa
 
 ---
 
-## ✨ Why NetworkBlaster
+## ✨ Why NetworkBlast
 
 * 🔹 **Script-first** — works from `.csx`, LINQPad and PowerShell with one line of setup.
 * 🔹 **Vault-agnostic** — secrets are pulled through a `Func<category, key, ct, Task<string>>` delegate, *not* a hard reference to SecretBlast or anything else. Wire any resolver you like.
@@ -36,7 +36,7 @@ Think "Postman as a library": named connections, lazy auth, script-friendly defa
 ## 📦 Installation
 
 ```bash
-dotnet add package NetworkBlaster
+dotnet add package NetworkBlast
 ```
 
 ---
@@ -46,8 +46,8 @@ dotnet add package NetworkBlaster
 ### `.csx` — bearer token, no vault
 
 ```csharp
-#r "nuget: NetworkBlaster, 1.0.3"
-using NetworkBlaster;
+#r "nuget: NetworkBlast, 1.0.0"
+using NetworkBlast;
 
 var gh = NetClient.WithToken("https://api.github.com/", "ghp_xxx");
 var body = await gh.GetStringAsync("repos/octocat/hello-world");
@@ -57,8 +57,8 @@ Console.WriteLine(body);
 ### `.csx` — API-key header
 
 ```csharp
-#r "nuget: NetworkBlaster, 1.0.3"
-using NetworkBlaster;
+#r "nuget: NetworkBlast, 1.0.0"
+using NetworkBlast;
 
 var api = NetClient.WithApiKey("https://api.example.com/", "X-API-Key", "secret");
 var data = await api.GetJsonAsync<Thing>("things/42");
@@ -83,8 +83,8 @@ var paris = await weather.GetStringAsync("data/2.5/weather?q=Paris");
 ### `.csx` — OAuth2 client credentials (token cached + auto-refresh)
 
 ```csharp
-#r "nuget: NetworkBlaster, 1.0.3"
-using NetworkBlaster;
+#r "nuget: NetworkBlast, 1.0.0"
+using NetworkBlast;
 
 var graph = NetClient.WithOAuth2ClientCredentials(
     baseUrl:       "https://graph.microsoft.com/v1.0/",
@@ -121,8 +121,8 @@ var report = await site.GetJsonAsync<Report>("reports/today");
 ### `.csx` inside TaskBlaster — resolver from `Secrets`
 
 ```csharp
-#r "nuget: NetworkBlaster, 1.0.3"
-using NetworkBlaster;
+#r "nuget: NetworkBlast, 1.0.0"
+using NetworkBlast;
 
 var gh = new NetClient(Secrets.Resolver, "github");
 var repo = await gh.GetJsonAsync<Repo>("repos/octocat/hello-world");
@@ -135,8 +135,8 @@ The vault must hold `(category: "github", key: "baseUrl")` and optionally `(cate
 ### LINQPad
 
 ```csharp
-// NuGet → NetworkBlaster
-var api = NetworkBlaster.NetClient.Anonymous("https://api.publicapis.org/");
+// NuGet → NetworkBlast
+var api = NetworkBlast.NetClient.Anonymous("https://api.publicapis.org/");
 var json = await api.GetStringAsync("entries");
 json.Dump();
 ```
@@ -144,9 +144,9 @@ json.Dump();
 ### PowerShell
 
 ```powershell
-Add-Type -Path (Resolve-Path .\NetworkBlaster.dll)
+Add-Type -Path (Resolve-Path .\NetworkBlast.dll)
 
-$gh = [NetworkBlaster.NetClient]::WithToken("https://api.github.com/", $env:GH_TOKEN)
+$gh = [NetworkBlast.NetClient]::WithToken("https://api.github.com/", $env:GH_TOKEN)
 $body = $gh.GetStringAsync("repos/octocat/hello-world").GetAwaiter().GetResult()
 $body
 ```
@@ -158,7 +158,7 @@ $body
 Every verb method takes an optional `RequestOptions` for query string, headers, timeout, and per-call retry budget. Use the `Options` static helpers for one-off shapes, or chain `.AddQuery(...)` / `.AddHeader(...)` to compose:
 
 ```csharp
-using NetworkBlaster;
+using NetworkBlast;
 
 // One-off query
 await client.GetAsync("search", Options.Query(("q", "hello world"), ("page", "2")));
@@ -185,7 +185,7 @@ await client.GetAsync("widgets", opts);
 
 ## 🔁 Retry Policy
 
-Off by default. When enabled (via `defaultRetryCount` on the constructor, `DefaultRetryCount` in `NetworkBlasterOptions`, or per-call via `Options.Retries`), NetworkBlaster will retry:
+Off by default. When enabled (via `defaultRetryCount` on the constructor, `DefaultRetryCount` in `NetworkBlastOptions`, or per-call via `Options.Retries`), NetworkBlast will retry:
 
 * 5xx server errors
 * `408 Request Timeout`
@@ -213,13 +213,13 @@ If the caller cancels before the timeout fires, the caller's cancellation wins.
 
 ## 🧼 SOAP (1.1 / 1.2) and general XML
 
-For legacy services that speak SOAP, NetworkBlaster ships envelope helpers and a typed `XmlSerializer` round-trip. SOAP `<Fault>` responses are surfaced as a typed `SoapFault` exception so you don't have to re-parse XML to detect errors.
+For legacy services that speak SOAP, NetworkBlast ships envelope helpers and a typed `XmlSerializer` round-trip. SOAP `<Fault>` responses are surfaced as a typed `SoapFault` exception so you don't have to re-parse XML to detect errors.
 
 ### Raw SOAP — paste-an-envelope style
 
 ```csharp
-using NetworkBlaster;
-using NetworkBlaster.Soap;
+using NetworkBlast;
+using NetworkBlast.Soap;
 
 var soap = NetClient.WithToken("https://legacy.example.com/svc", token);
 
@@ -289,11 +289,11 @@ Both use `XmlSerializer`; the request body is sent as `application/xml`.
 
 ## 🧮 OData v4 (typed, with auto-paging)
 
-NetworkBlaster ships first-class support for OData v4 query options and pagination. The headline path is the typed LINQ-flavored chain on `INetClient.OData<T>(path)`:
+NetworkBlast ships first-class support for OData v4 query options and pagination. The headline path is the typed LINQ-flavored chain on `INetClient.OData<T>(path)`:
 
 ```csharp
-using NetworkBlaster;
-using NetworkBlaster.OData;
+using NetworkBlast;
+using NetworkBlast.OData;
 
 var customers = client
     .OData<Customer>("Customers")
@@ -384,7 +384,7 @@ For the script-friendly factories (`WithToken`, `WithApiKey`, `WithBasicAuth`, `
 ## 🧱 DI Wiring
 
 ```csharp
-services.AddNetworkBlaster(o =>
+services.AddNetworkBlast(o =>
 {
     o.Resolver       = Secrets.Resolver;
     o.ConnectionName = "github";
@@ -405,7 +405,7 @@ services.AddNetworkBlaster(o =>
 ## 📖 API Surface
 
 ```csharp
-namespace NetworkBlaster;
+namespace NetworkBlast;
 
 // resolver shape — compatible with TaskBlaster's Secrets.Resolver
 public delegate Task<string> SecretResolver(string category, string key, CancellationToken ct);
@@ -463,7 +463,7 @@ public sealed class NetClient : INetClient
 
 // ---------- OAuth2 building blocks ----------
 
-namespace NetworkBlaster.Auth;
+namespace NetworkBlast.Auth;
 
 public sealed class OAuth2TokenProvider
 {
@@ -477,7 +477,7 @@ public sealed class OAuth2TokenProvider
 
 // ---------- SOAP ----------
 
-namespace NetworkBlaster.Soap;
+namespace NetworkBlast.Soap;
 
 public enum SoapVersion { V11, V12 }
 
@@ -522,7 +522,7 @@ public static class SoapExtensions
 
 // ---------- general XML helpers ----------
 
-namespace NetworkBlaster;
+namespace NetworkBlast;
 
 public static class XmlExtensions
 {
@@ -558,7 +558,7 @@ public static class RequestOptionsExtensions
 
 // ---------- OData v4 ----------
 
-namespace NetworkBlaster.OData;
+namespace NetworkBlast.OData;
 
 public sealed record ODataPage<T>
 {

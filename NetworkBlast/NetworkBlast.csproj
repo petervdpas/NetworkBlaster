@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IsPackable>true</IsPackable>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <PackageOutputPath>bin\$(Configuration)</PackageOutputPath>
+        <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
+        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+        <PackageId>NetworkBlast</PackageId>
+        <Version>1.0.0</Version>
+        <Authors>Peter van de Pas</Authors>
+        <Description>NetworkBlast — programmable HTTP/REST client for .NET. Sibling to AzureBlast in the Blast family. Named connections resolved through a pluggable Func&lt;category, key, ct, Task&lt;string&gt;&gt; secret resolver, so callers stay decoupled from any vault implementation (SecretBlast or otherwise).</Description>
+        <PackageTags>http;rest;client;httpclient;named-connections;blast</PackageTags>
+        <PackageLicenseFile>assets/LICENSE.txt</PackageLicenseFile>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageIcon>assets/icon.png</PackageIcon>
+        <DebugType>embedded</DebugType>
+        <Deterministic>true</Deterministic>
+        <PathMap>$(MSBuildProjectDirectory)=.</PathMap>
+        <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+        <PublishRepositoryUrl>true</PublishRepositoryUrl>
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
+        <EnableSourceLink>true</EnableSourceLink>
+        <RepositoryUrl>https://github.com/petervdpas/NetworkBlast</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <None Include="../assets/icon.png" Pack="true" PackagePath="assets/" />
+        <None Include="../assets/LICENSE.txt" Pack="true" PackagePath="assets/" />
+        <None Include="../README.md" Pack="true" PackagePath="" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="NetworkBlast.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    </ItemGroup>
+</Project>
