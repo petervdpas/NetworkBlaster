@@ -10,7 +10,7 @@
         <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\$(AssemblyName).xml</DocumentationFile>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
         <PackageId>NetworkBlast</PackageId>
-        <Version>1.0.0</Version>
+        <Version>1.0.1</Version>
         <Authors>Peter van de Pas</Authors>
         <Description>NetworkBlast — programmable HTTP/REST client for .NET. Sibling to AzureBlast in the Blast family. Named connections resolved through a pluggable Func&lt;category, key, ct, Task&lt;string&gt;&gt; secret resolver, so callers stay decoupled from any vault implementation (SecretBlast or otherwise).</Description>
         <PackageTags>http;rest;client;httpclient;named-connections;blast</PackageTags>
@@ -40,5 +40,18 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    </ItemGroup>
+
+    <!--
+        Blast-family convention: declare the canonical front-door type(s)
+        of this assembly so AI assistants (e.g. TaskBlaster's script
+        helper) can identify the entry points without having to scan
+        every public type. Comma-separated, fully-qualified.
+    -->
+    <ItemGroup>
+        <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+            <_Parameter1>Blast.PrimaryFacade</_Parameter1>
+            <_Parameter2>NetworkBlast.NetClient</_Parameter2>
+        </AssemblyAttribute>
     </ItemGroup>
 </Project>
